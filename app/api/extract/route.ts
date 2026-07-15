@@ -5,7 +5,8 @@ import { ExtractionSchema, type Lang } from "@/lib/types";
 import { extractSystemPrompt } from "@/prompts/extract";
 
 export const runtime = "nodejs";
-export const maxDuration = 120;
+// Vision models on the free tier can retry several times on 429s
+export const maxDuration = 300;
 
 const SPREADSHEET_EXT = /\.(xlsx|xls|csv)$/i;
 

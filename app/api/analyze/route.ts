@@ -28,7 +28,8 @@ import { freightSystemPrompt } from "@/prompts/freight";
 import { taxesSystemPrompt } from "@/prompts/taxes";
 
 export const runtime = "nodejs";
-export const maxDuration = 180;
+// Free models + retries can take ~3 min; 300s is the Vercel Hobby (fluid) cap
+export const maxDuration = 300;
 
 const lineValue = (li: Extraction["lineItems"][number]) =>
   li.lineTotal ?? (li.quantity != null && li.unitPrice != null ? li.quantity * li.unitPrice : 0);
