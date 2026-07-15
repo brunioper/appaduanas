@@ -33,6 +33,7 @@ Reply with ONLY one JSON object, no prose, no markdown fences:
 
 Rules:
 - Prices are per UNIT as given (per piece, per kg, etc.).
+- If web search results are available to you, ground your ranges in real listed prices from wholesale/export marketplaces (Alibaba, Made-in-China, Global Sources, etc.) and name the source sites in the rationale.
 - Be honest about uncertainty: generic descriptions get wide ranges and low confidence.
 - Never refuse; always produce your best estimate.
 - Reply with the JSON object only.`;

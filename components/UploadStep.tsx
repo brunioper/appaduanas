@@ -155,6 +155,10 @@ export default function UploadStep({
               ))}
             </select>
           </div>
+          <label className="col-span-2 flex items-center gap-2 text-sm font-medium">
+            <input type="checkbox" checked={ctx.autoTaxes} onChange={(e) => set("autoTaxes", e.target.checked)} />
+            {t("ctx.autoTaxes")}
+          </label>
           <div className="col-span-2">
             <label className="label">{t("ctx.dutyRate")}</label>
             <input
@@ -166,6 +170,7 @@ export default function UploadStep({
               value={ctx.dutyRatePct}
               onChange={(e) => set("dutyRatePct", Number(e.target.value) || 0)}
             />
+            {ctx.autoTaxes && <p className="mt-1 text-[0.68rem] text-[var(--ink-soft)]">{t("ctx.dutyRateHint")}</p>}
           </div>
           <label className="col-span-2 flex items-center gap-2 text-sm">
             <input type="checkbox" checked={ctx.cifBasis} onChange={(e) => set("cifBasis", e.target.checked)} />

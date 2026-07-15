@@ -63,6 +63,50 @@ export const BenchmarkResponseSchema = z.object({
 });
 export type BenchmarkResponse = z.infer<typeof BenchmarkResponseSchema>;
 
+const conf = z.preprocess(
+  (v) => (typeof v === "number" ? Math.min(1, Math.max(0, v)) : 0.5),
+  z.number()
+);
+
+/** AI response: tariff classification + import taxes per destination country */
+export const TaxesAiSchema = z.object({
+  items: z
+    .array(
+      z.object({
+        index: z.number(),
+        hs6: str.default(null),
+        ncm: str.default(null),
+        code_confidence: conf,
+        effective_rate_pct: num,
+        components: z
+          .array(
+            z.object({
+              name: z.preprocess((v) => String(v ?? ""), z.string()),
+              rate_pct: num,
+              base: str.default(null),
+            })
+          )
+          .default([]),
+        rationale: z.preprocess((v) => String(v ?? ""), z.string()),
+      })
+    )
+    .default([]),
+  shipment_rate_pct: num,
+  comment: z.preprocess((v) => String(v ?? ""), z.string()),
+  confidence: conf,
+});
+export type TaxesAi = z.infer<typeof TaxesAiSchema>;
+
+/** AI response: realistic freight cost range for the route/mode/cargo */
+export const FreightAiSchema = z.object({
+  low_usd: num,
+  typical_usd: num,
+  high_usd: num,
+  confidence: conf,
+  rationale: z.preprocess((v) => String(v ?? ""), z.string()),
+});
+export type FreightAi = z.infer<typeof FreightAiSchema>;
+
 export type Lang = "es" | "en";
 export type ShippingMode = "sea" | "air" | "courier";
 
@@ -75,6 +119,7 @@ export interface CaseContext {
   declaredCurrency: string;
   dutyRatePct: number;
   cifBasis: boolean;
+  autoTaxes: boolean;
   lang: Lang;
   thresholds: { warnPct: number; failPct: number };
 }
@@ -98,14 +143,57 @@ export interface CifReconstruction {
   insuranceSource: "invoice" | "estimated";
   correctedCif: number;
   dutyGap: number;
+  dutyRatePct: number;
+  rateSource: "ai" | "manual";
   currency: string;
   explanation: string;
+}
+
+export interface TaxComponent {
+  name: string;
+  ratePct: number | null;
+  base: string | null;
+}
+
+export interface TaxItemResult {
+  index: number;
+  description: string;
+  hs6: string | null;
+  ncm: string | null;
+  codeConfidence: number;
+  effectiveRatePct: number | null;
+  taxAmount: number | null; // in invoice currency, on this item's CIF share
+  components: TaxComponent[];
+  rationale: string;
+}
+
+export interface TaxesResult {
+  status: Status;
+  source: "ai" | "none";
+  items: TaxItemResult[];
+  shipmentRatePct: number | null;
+  totalTax: number | null; // on corrected CIF, invoice currency
+  currency: string;
+  comment: string;
+  confidence: number;
+}
+
+export interface FreightCheck {
+  status: Status;
+  applicable: boolean;
+  lowUsd: number | null;
+  typicalUsd: number | null;
+  highUsd: number | null;
+  actualUsd: number | null;
+  actualSource: "invoice" | "estimated";
+  comment: string;
 }
 
 export interface BenchmarkRow {
   index: number;
   description: string;
   hsCode: string | null;
+  ncm: string | null;
   quantity: number | null;
   unit: string | null;
   declaredUnitPrice: number | null;
@@ -132,6 +220,9 @@ export interface AnalysisResult {
   cif: CifReconstruction;
   redFlags: CheckResult;
   benchmark: BenchmarkRow[];
+  taxes: TaxesResult;
+  freightCheck: FreightCheck;
+  webSearch: boolean;
   overall: {
     verdict: Status;
     confidence: number;

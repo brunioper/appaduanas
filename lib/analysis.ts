@@ -136,6 +136,8 @@ export function reconstructCif(ex: Extraction, ctx: CaseContext): CifReconstruct
     insuranceSource: "estimated",
     correctedCif: declaredValue,
     dutyGap: 0,
+    dutyRatePct: ctx.dutyRatePct || 0,
+    rateSource: "manual",
     currency,
     explanation: "",
   };

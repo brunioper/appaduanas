@@ -45,6 +45,8 @@ export default function Results({
             <p className="mono mt-2 text-xs text-[var(--ink-soft)]">
               {Math.round(r.overall.confidence * 100)}% {t("res.confidence")}
               {" · "}
+              {r.webSearch ? t("res.webOn") : t("res.webOff")}
+              {" · "}
               {t("fx.label")}: 1 {r.fx.currency} = {r.fx.rate.toFixed(4)} USD ({r.fx.source}, {r.fx.date})
               {saved != null && <> · {saved ? `✓ ${t("res.savedYes")}` : t("res.savedNo")}</>}
             </p>
@@ -88,9 +90,77 @@ export default function Results({
               className="mono mt-3 inline-block rounded border px-3 py-2 text-sm font-bold"
               style={{ background: "var(--fail-soft)", borderColor: "var(--fail)", color: "var(--fail)" }}
             >
-              {t("cif.dutyGap")}: {money(r.cif.dutyGap, cur)}
+              {t("cif.dutyGap")}: {money(r.cif.dutyGap, cur)}{" "}
+              <em className="font-normal">
+                ({r.cif.dutyRatePct}% — {r.cif.rateSource === "ai" ? t("cif.rateAi") : t("cif.rateManual")})
+              </em>
             </p>
           )}
+        </section>
+      )}
+
+      {/* Estimated import duties (AI tariff classification) */}
+      {r.taxes?.source === "ai" && r.taxes.items.length > 0 && (
+        <section className="card fade-up fade-up-1 mt-4 overflow-x-auto">
+          <div className="flex flex-wrap items-center gap-3 px-5 pt-5">
+            <StatusIcon status="ok" />
+            <h3 className="font-display text-lg font-bold">{t("taxes.title")}</h3>
+            {r.taxes.shipmentRatePct != null && (
+              <span className="chip bg-[var(--na-soft)] text-[var(--ink-soft)]">
+                ≈ {r.taxes.shipmentRatePct.toFixed(1)}% CIF
+              </span>
+            )}
+          </div>
+          {r.taxes.comment && <p className="mt-2 px-5 text-sm text-[var(--ink-soft)]">{r.taxes.comment}</p>}
+          <table className="mt-3 w-full text-sm">
+            <thead>
+              <tr className="border-b bg-[var(--paper)] text-left">
+                <th className="label !mb-0 px-5 py-2.5">{t("tbl.description")}</th>
+                <th className="label !mb-0 px-3 py-2.5">NCM</th>
+                <th className="label !mb-0 px-3 py-2.5">HS6</th>
+                <th className="label !mb-0 px-3 py-2.5">{t("taxes.effRate")}</th>
+                <th className="label !mb-0 px-3 py-2.5 pr-5">{t("taxes.amount")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {r.taxes.items.map((it) => (
+                <tr key={it.index} className="border-b align-top last:border-0">
+                  <td className="max-w-[280px] px-5 py-2.5">
+                    <p>{it.description || "—"}</p>
+                    {(it.components.length > 0 || it.rationale) && (
+                      <details className="mt-1">
+                        <summary className="cursor-pointer text-xs text-[var(--brand)]">{t("taxes.components")}</summary>
+                        <ul className="mono mt-1 space-y-0.5 text-xs text-[var(--ink-soft)]">
+                          {it.components.map((c, i) => (
+                            <li key={i}>
+                              {c.name}: {c.ratePct != null ? `${c.ratePct}%` : "—"}
+                              {c.base ? ` (${c.base})` : ""}
+                            </li>
+                          ))}
+                        </ul>
+                        {it.rationale && <p className="mt-1 text-xs text-[var(--ink-soft)]">{it.rationale}</p>}
+                      </details>
+                    )}
+                  </td>
+                  <td className="mono px-3 py-2.5">{it.ncm || "—"}</td>
+                  <td className="mono px-3 py-2.5">{it.hs6 || "—"}</td>
+                  <td className="mono px-3 py-2.5">{it.effectiveRatePct != null ? `${it.effectiveRatePct}%` : "—"}</td>
+                  <td className="mono px-3 py-2.5 pr-5">{money(it.taxAmount, r.taxes.currency)}</td>
+                </tr>
+              ))}
+            </tbody>
+            {r.taxes.totalTax != null && (
+              <tfoot>
+                <tr className="bg-[var(--paper)]">
+                  <td colSpan={4} className="px-5 py-2.5 text-right text-xs font-semibold uppercase tracking-wide text-[var(--ink-soft)]">
+                    {t("taxes.total")}
+                  </td>
+                  <td className="mono px-3 py-2.5 pr-5 font-bold">{money(r.taxes.totalTax, r.taxes.currency)}</td>
+                </tr>
+              </tfoot>
+            )}
+          </table>
+          <p className="px-5 pb-4 pt-2 text-xs italic text-[var(--ink-soft)]">{t("taxes.note")}</p>
         </section>
       )}
 
@@ -100,6 +170,20 @@ export default function Results({
           [
             { title: t("chk.consistency"), check: r.consistency },
             { title: t("chk.redflags"), check: r.redFlags },
+            ...(r.freightCheck?.applicable
+              ? [
+                  {
+                    title: t("chk.freight"),
+                    check: {
+                      status: r.freightCheck.status,
+                      issues: [
+                        r.freightCheck.comment,
+                        `${t("freight.range")}: US$ ${Math.round(r.freightCheck.lowUsd ?? 0).toLocaleString("en-US")} – ${Math.round(r.freightCheck.highUsd ?? 0).toLocaleString("en-US")} · ${t("freight.actual")}: US$ ${Math.round(r.freightCheck.actualUsd ?? 0).toLocaleString("en-US")} (${r.freightCheck.actualSource === "invoice" ? t("cif.invoice") : t("cif.est")})`,
+                      ].filter(Boolean),
+                    },
+                  },
+                ]
+              : []),
           ] as { title: string; check: { status: Status; issues: string[] } }[]
         ).map(({ title, check }, idx) => (
           <div key={title} className={`card fade-up fade-up-${idx + 1} p-5`}>
@@ -138,7 +222,7 @@ export default function Results({
                 <td className="max-w-[280px] px-5 py-3">
                   <p className="font-medium">{row.description || "—"}</p>
                   <p className="mono mt-1 text-xs text-[var(--ink-soft)]">
-                    {row.hsCode && <>HS {row.hsCode} · </>}
+                    {row.ncm ? <>NCM {row.ncm} · </> : row.hsCode ? <>HS {row.hsCode} · </> : null}
                     {row.quantity != null && (
                       <>
                         {row.quantity.toLocaleString("en-US")} {row.unit || "u"} ·{" "}

@@ -18,6 +18,7 @@ const DEFAULT_CTX: CaseContext = {
   declaredCurrency: "USD",
   dutyRatePct: 22,
   cifBasis: true,
+  autoTaxes: true,
   lang: "es",
   thresholds: { warnPct: 10, failPct: 30 },
 };
