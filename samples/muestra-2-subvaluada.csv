@@ -1,0 +1,14 @@
+FACTURA COMERCIAL DE PRUEBA - DATOS FICTICIOS,,,,,
+COMMERCIAL INVOICE,INV-2026-8812,,,,
+Date,2026-07-02,,,,
+Supplier,Shenzhen Best Trade Ltd,,,,
+Buyer,Comercial Andina S.R.L.,,,,
+Currency,USD,,,,
+Incoterm,CIF Montevideo,,,,
+,,,,,
+Item,Description,Qty,Unit,Unit Price,Line Total
+1,Smartphone Android 6.5 inch 128GB dual SIM,200,pcs,25.00,5000.00
+2,Wireless bluetooth earbuds with charging case,500,pcs,1.50,750.00
+3,Smart watch fitness tracker touchscreen,300,pcs,3.00,900.00
+,,,,,
+,TOTAL CIF,,,,6650.00

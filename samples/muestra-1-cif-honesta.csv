@@ -1,0 +1,17 @@
+FACTURA COMERCIAL DE PRUEBA - DATOS FICTICIOS,,,,,
+COMMERCIAL INVOICE,INV-2026-0341,,,,
+Date,2026-06-28,,,,
+Supplier,Guangzhou Home Electronics Co. Ltd,,,,
+Buyer,Importadora Rio de la Plata S.A. (Montevideo Uruguay),,,,
+Currency,USD,,,,
+Incoterm,CIF Montevideo,,,,
+,,,,,
+Item,Description,Qty,Unit,Unit Price,Line Total
+1,Electric kettle 1.7L stainless steel 220V,500,pcs,8.40,4200.00
+2,Toaster 2-slice 800W plastic housing,400,pcs,7.10,2840.00
+3,Hand blender 600W with cup,300,pcs,9.80,2940.00
+,,,,,
+,Subtotal FOB,,,,9980.00
+,Ocean freight,,,,860.00
+,Insurance,,,,45.00
+,TOTAL CIF,,,,10885.00

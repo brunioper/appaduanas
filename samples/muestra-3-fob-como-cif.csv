@@ -1,0 +1,14 @@
+FACTURA COMERCIAL DE PRUEBA - DATOS FICTICIOS,,,,,
+COMMERCIAL INVOICE,INV-2026-5527,,,,
+Date,2026-06-15,,,,
+Supplier,Ningbo Textile Export Co.,,,,
+Buyer,Textiles del Sur S.A.,,,,
+Currency,USD,,,,
+Incoterm,FOB Ningbo,,,,
+,,,,,
+Item,Description,Qty,Unit,Unit Price,Line Total
+1,Men's cotton t-shirt 180gsm printed,3000,pcs,1.85,5550.00
+2,Women's polyester leggings assorted sizes,2000,pcs,2.30,4600.00
+3,Kids hoodie fleece 280gsm,1500,pcs,3.60,5400.00
+,,,,,
+,TOTAL FOB,,,,15550.00
