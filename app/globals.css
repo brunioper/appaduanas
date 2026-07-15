@@ -130,6 +130,12 @@ h1, h2, h3, .font-display {
 .fade-up-2 { animation-delay: 0.12s; }
 .fade-up-3 { animation-delay: 0.2s; }
 
+@keyframes progress-slide {
+  0% { left: -35%; }
+  100% { left: 105%; }
+}
+.progress-slider { animation: progress-slide 1.4s ease-in-out infinite; }
+
 @keyframes spin { to { transform: rotate(360deg); } }
 .spinner {
   width: 1rem;

@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import { chatJson, MODELS, type ChatMessage } from "@/lib/ai";
 import {
   checkConsistency,
@@ -9,6 +9,7 @@ import {
   DEFAULT_THRESHOLDS,
 } from "@/lib/analysis";
 import { getUsdRate } from "@/lib/fx";
+import { aiEventNote, ndjsonResponse, type Send } from "@/lib/progress";
 import { getSupabase } from "@/lib/supabase";
 import {
   BenchmarkResponseSchema,
@@ -35,8 +36,9 @@ const lineValue = (li: Extraction["lineItems"][number]) =>
   li.lineTotal ?? (li.quantity != null && li.unitPrice != null ? li.quantity * li.unitPrice : 0);
 
 export async function POST(req: NextRequest) {
-  try {
-    const body = await req.json();
+  const body = await req.json();
+
+  return ndjsonResponse(async (send: Send) => {
     const extraction = ExtractionSchema.parse(body.extraction);
     const ctx: CaseContext = {
       originCountry: body.context?.originCountry || "",
@@ -56,17 +58,15 @@ export async function POST(req: NextRequest) {
     };
     const es = ctx.lang === "es";
 
-    // 1. FX: everything is benchmarked in USD
+    // 1. FX + deterministic checks
     const fx = await getUsdRate(extraction.currency || ctx.declaredCurrency);
-
-    // 2. Deterministic checks
     const consistency = checkConsistency(extraction, ctx);
     const cif = reconstructCif(extraction, ctx);
     const declaredTotalUsd =
       (ctx.declaredValue ?? extraction.invoiceTotal ?? 0) * fx.rate || null;
     const redFlags = checkRedFlags(extraction, ctx, declaredTotalUsd);
 
-    // 3. Reference DB first (official values imported into Supabase), model second
+    // 2. Reference DB first (official values imported into Supabase), model second
     const sb = getSupabase();
     const refByIndex = new Map<number, { low: number; typical: number; high: number }>();
     if (sb) {
@@ -105,11 +105,20 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // ── 4. AI pipeline: three independent calls, run in parallel. ──────────
-    // Each degrades gracefully: one failed call never kills the analysis.
+    // 3. AI pipeline: three independent calls in parallel, each streaming its
+    //    own stage status. One failed call never kills the analysis.
+    const track = <T,>(id: string, p: Promise<T>): Promise<T> =>
+      p.then(
+        (v) => {
+          send({ t: "s", id, st: "ok" });
+          return v;
+        },
+        (e) => {
+          send({ t: "s", id, st: "err", note: e instanceof Error ? e.message.slice(0, 140) : undefined });
+          throw e;
+        }
+      );
 
-    // 4a. Market benchmark (with optional web-search grounding).
-    //     Declared prices are intentionally withheld (see prompts/benchmark.ts).
     const pending = extraction.lineItems
       .map((li, index) => ({ li, index }))
       .filter(({ index }) => !refByIndex.has(index));
@@ -117,79 +126,115 @@ export async function POST(req: NextRequest) {
     const webSearchMode = (process.env.WEB_SEARCH || "auto").toLowerCase();
     let webUsed = false;
 
-    const benchPromise = (async () => {
-      if (pending.length === 0) return null;
-      const payload = pending.map(({ li, index }) => ({
-        index,
-        description: li.description,
-        hs_code: li.hsCode,
-        quantity: li.quantity,
-        unit: li.unit || "pcs",
-        origin_country: ctx.originCountry || "unknown",
-      }));
-      const messages: ChatMessage[] = [
-        { role: "system", content: benchmarkSystemPrompt(ctx.lang) },
-        { role: "user", content: JSON.stringify({ items: payload }, null, 2) },
-      ];
-      const run = (plugins?: unknown[]) =>
-        chatJson(BenchmarkResponseSchema, { models: MODELS.reasoning, messages, plugins });
-      if (webSearchMode !== "off") {
-        try {
-          const out = await run([{ id: "web", max_results: 5 }]);
-          webUsed = true;
-          return out;
-        } catch {
-          // web plugin needs OpenRouter credits — fall back to plain model knowledge
+    send({ t: "s", id: "bench", st: "run" });
+    const benchPromise = track(
+      "bench",
+      (async () => {
+        if (pending.length === 0) return null;
+        const payload = pending.map(({ li, index }) => ({
+          index,
+          description: li.description,
+          hs_code: li.hsCode,
+          quantity: li.quantity,
+          unit: li.unit || "pcs",
+          origin_country: ctx.originCountry || "unknown",
+        }));
+        const messages: ChatMessage[] = [
+          { role: "system", content: benchmarkSystemPrompt(ctx.lang) },
+          { role: "user", content: JSON.stringify({ items: payload }, null, 2) },
+        ];
+        const run = (plugins?: unknown[]) =>
+          chatJson(BenchmarkResponseSchema, {
+            models: MODELS.reasoning,
+            messages,
+            plugins,
+            onEvent: (e) => send({ t: "s", id: "bench", st: "run", note: aiEventNote(ctx.lang, e) }),
+          });
+        if (webSearchMode !== "off") {
+          try {
+            send({
+              t: "s",
+              id: "bench",
+              st: "run",
+              note: es ? "Buscando precios reales en la web…" : "Searching real prices on the web…",
+            });
+            const out = await run([{ id: "web", max_results: 5 }]);
+            webUsed = true;
+            return out;
+          } catch {
+            send({
+              t: "s",
+              id: "bench",
+              st: "run",
+              note: es
+                ? "Sin créditos para búsqueda web — usando conocimiento del modelo"
+                : "No web-search credits — using model knowledge",
+            });
+          }
         }
-      }
-      return run();
-    })();
+        return run();
+      })()
+    );
 
-    // 4b. Tariff classification (HS6 + NCM) and import taxes for the destination country.
-    const taxesPromise = (async () => {
-      if (!ctx.autoTaxes || extraction.lineItems.length === 0) return null;
-      const payload = extraction.lineItems.map((li, index) => ({
-        index,
-        description: li.description,
-        hs6_guess: li.hsCode,
-        origin_country: ctx.originCountry || "unknown",
-      }));
-      const messages: ChatMessage[] = [
-        { role: "system", content: taxesSystemPrompt(ctx.lang, ctx.destinationCountry) },
-        {
-          role: "user",
-          content: JSON.stringify({ destination_country: ctx.destinationCountry, items: payload }, null, 2),
-        },
-      ];
-      return chatJson(TaxesAiSchema, { models: MODELS.reasoning, messages });
-    })();
+    send({ t: "s", id: "taxes", st: "run" });
+    const taxesPromise = track(
+      "taxes",
+      (async () => {
+        if (!ctx.autoTaxes || extraction.lineItems.length === 0) return null;
+        const payload = extraction.lineItems.map((li, index) => ({
+          index,
+          description: li.description,
+          hs6_guess: li.hsCode,
+          origin_country: ctx.originCountry || "unknown",
+        }));
+        const messages: ChatMessage[] = [
+          { role: "system", content: taxesSystemPrompt(ctx.lang, ctx.destinationCountry) },
+          {
+            role: "user",
+            content: JSON.stringify({ destination_country: ctx.destinationCountry, items: payload }, null, 2),
+          },
+        ];
+        return chatJson(TaxesAiSchema, {
+          models: MODELS.reasoning,
+          messages,
+          onEvent: (e) => send({ t: "s", id: "taxes", st: "run", note: aiEventNote(ctx.lang, e) }),
+        });
+      })()
+    );
 
-    // 4c. Freight realism: is the freight amount plausible for route/mode/cargo?
-    const freightPromise = (async () => {
-      if (extraction.lineItems.length === 0) return null;
-      const cargo = extraction.lineItems.map((li) => ({
-        description: li.description,
-        quantity: li.quantity,
-        unit: li.unit || "pcs",
-      }));
-      const messages: ChatMessage[] = [
-        { role: "system", content: freightSystemPrompt(ctx.lang) },
-        {
-          role: "user",
-          content: JSON.stringify(
-            {
-              origin_country: ctx.originCountry || "unknown",
-              destination_country: ctx.destinationCountry || "unknown",
-              transport_mode: ctx.shippingMode,
-              cargo,
-            },
-            null,
-            2
-          ),
-        },
-      ];
-      return chatJson(FreightAiSchema, { models: MODELS.reasoning, messages });
-    })();
+    send({ t: "s", id: "freight", st: "run" });
+    const freightPromise = track(
+      "freight",
+      (async () => {
+        if (extraction.lineItems.length === 0) return null;
+        const cargo = extraction.lineItems.map((li) => ({
+          description: li.description,
+          quantity: li.quantity,
+          unit: li.unit || "pcs",
+        }));
+        const messages: ChatMessage[] = [
+          { role: "system", content: freightSystemPrompt(ctx.lang) },
+          {
+            role: "user",
+            content: JSON.stringify(
+              {
+                origin_country: ctx.originCountry || "unknown",
+                destination_country: ctx.destinationCountry || "unknown",
+                transport_mode: ctx.shippingMode,
+                cargo,
+              },
+              null,
+              2
+            ),
+          },
+        ];
+        return chatJson(FreightAiSchema, {
+          models: MODELS.reasoning,
+          messages,
+          onEvent: (e) => send({ t: "s", id: "freight", st: "run", note: aiEventNote(ctx.lang, e) }),
+        });
+      })()
+    );
 
     const [benchSettled, taxesSettled, freightSettled] = await Promise.allSettled([
       benchPromise,
@@ -201,9 +246,9 @@ export async function POST(req: NextRequest) {
     const taxesAi = taxesSettled.status === "fulfilled" ? taxesSettled.value : null;
     const freightAi = freightSettled.status === "fulfilled" ? freightSettled.value : null;
     const benchFailed = benchSettled.status === "rejected";
-    let reasoningModelUsed = bench?.model ?? taxesAi?.model ?? freightAi?.model ?? MODELS.reasoning[0];
+    const reasoningModelUsed = bench?.model ?? taxesAi?.model ?? freightAi?.model ?? MODELS.reasoning[0];
 
-    // 5. Merge benchmark into rows with verdicts
+    // 4. Merge benchmark into rows with verdicts
     const modelItems = new Map<
       number,
       { low: number | null; typical: number | null; high: number | null; confidence: number; rationale: string }
@@ -256,20 +301,18 @@ export async function POST(req: NextRequest) {
       };
     });
 
-    // 6. Import taxes: per-item amounts on CIF shares + shipment totals.
-    //    If the AI produced a country-specific effective rate, it replaces the
-    //    manual duty rate in the duty-gap calculation.
+    // 5. Import taxes: per-item amounts on CIF shares + shipment totals
     const sumLines = extraction.lineItems.reduce((a, li) => a + lineValue(li), 0);
     const taxes: TaxesResult = (() => {
       if (!taxesAi || taxesAi.data.items.length === 0) {
         return {
-          status: "na",
-          source: "none",
+          status: "na" as Status,
+          source: "none" as const,
           items: [],
           shipmentRatePct: null,
           totalTax: null,
           currency: cif.currency,
-          comment: benchFailed && !taxesAi ? "" : "",
+          comment: "",
           confidence: 0,
         };
       }
@@ -312,7 +355,7 @@ export async function POST(req: NextRequest) {
       cif.dutyGap = Math.max(0, (cif.correctedCif - cif.declaredValue) * (taxes.shipmentRatePct / 100));
     }
 
-    // 7. Freight realism check
+    // 6. Freight realism check
     const freightCheck: FreightCheck = (() => {
       const actual =
         extraction.freight != null && extraction.freight > 0
@@ -322,7 +365,7 @@ export async function POST(req: NextRequest) {
             : null;
       if (!freightAi || !actual || freightAi.data.low_usd == null || freightAi.data.high_usd == null) {
         return {
-          status: "na",
+          status: "na" as Status,
           applicable: false,
           lowUsd: freightAi?.data.low_usd ?? null,
           typicalUsd: freightAi?.data.typical_usd ?? null,
@@ -358,7 +401,7 @@ export async function POST(req: NextRequest) {
       };
     })();
 
-    // 8. Overall verdict
+    // 7. Overall verdict
     const rowStatuses = rows.map((r) => r.verdict);
     const overallVerdict = combineStatuses([
       consistency.status,
@@ -403,9 +446,10 @@ export async function POST(req: NextRequest) {
       analyzedAt: new Date().toISOString(),
     };
 
-    // 9. Persist (best-effort; the app works without Supabase)
+    // 8. Persist (best-effort; the app works without Supabase)
     let saved = false;
     if (sb) {
+      send({ t: "s", id: "save", st: "run" });
       const { error } = await sb.from("analyses").insert({
         supplier: extraction.supplier,
         invoice_number: extraction.invoiceNumber,
@@ -418,7 +462,6 @@ export async function POST(req: NextRequest) {
       });
       saved = !error;
       if (!error) {
-        // store model estimates for future cross-referencing (marked as 'model', never 'official')
         const estimates = rows
           .filter((r) => r.source === "model" && r.lowUsd != null)
           .map((r) => ({
@@ -433,11 +476,9 @@ export async function POST(req: NextRequest) {
           }));
         if (estimates.length) await sb.from("reference_prices").insert(estimates);
       }
+      send({ t: "s", id: "save", st: saved ? "ok" : "warn" });
     }
 
-    return NextResponse.json({ result, saved });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Error desconocido durante el análisis.";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+    send({ t: "result", result, saved });
+  });
 }

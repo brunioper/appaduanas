@@ -43,12 +43,24 @@ export default function ExtractionEditor({
     { key: "otherCharges", label: t("f.otherCharges"), numeric: true },
   ];
 
+  const hasRealItems = ex.lineItems.some((li) => li.description.trim().length > 0);
+
   return (
     <div className="fade-up">
       <div className="mb-5">
         <h2 className="font-display text-2xl font-bold">{t("review.title")}</h2>
         <p className="mt-1 text-sm text-[var(--ink-soft)]">{t("review.hint")}</p>
       </div>
+
+      {!hasRealItems && (
+        <div
+          className="mb-4 flex items-start gap-3 rounded border px-4 py-3 text-sm"
+          style={{ background: "var(--warn-soft)", borderColor: "var(--warn)", color: "var(--warn)" }}
+        >
+          <span className="font-bold">!</span>
+          {t("review.noItems")}
+        </div>
+      )}
 
       <div className="card p-5">
         <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
@@ -154,7 +166,7 @@ export default function ExtractionEditor({
         <button onClick={onBack} className="btn btn-ghost" disabled={loading}>
           ← {t("act.back")}
         </button>
-        <button onClick={onAnalyze} disabled={loading || ex.lineItems.length === 0} className="btn btn-primary">
+        <button onClick={onAnalyze} disabled={loading || !hasRealItems} className="btn btn-primary">
           {loading && <span className="spinner" />}
           {loading ? t("act.analyzing") : t("act.analyze")}
         </button>

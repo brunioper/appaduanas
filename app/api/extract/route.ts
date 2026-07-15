@@ -1,6 +1,7 @@
-import { NextRequest, NextResponse } from "next/server";
+import { NextRequest } from "next/server";
 import * as XLSX from "xlsx";
 import { chatJson, MODELS, type ChatMessage, type ContentPart } from "@/lib/ai";
+import { aiEventNote, ndjsonResponse } from "@/lib/progress";
 import { ExtractionSchema, type Lang } from "@/lib/types";
 import { extractSystemPrompt } from "@/prompts/extract";
 
@@ -11,14 +12,18 @@ export const maxDuration = 300;
 const SPREADSHEET_EXT = /\.(xlsx|xls|csv)$/i;
 
 export async function POST(req: NextRequest) {
-  try {
-    const form = await req.formData();
-    const lang = (form.get("lang") === "en" ? "en" : "es") as Lang;
+  const form = await req.formData();
+  const lang = (form.get("lang") === "en" ? "en" : "es") as Lang;
+  const es = lang === "es";
+
+  return ndjsonResponse(async (send) => {
     const files = form.getAll("files").filter((f): f is File => f instanceof File);
     if (files.length === 0) {
-      return NextResponse.json({ error: "No se recibieron archivos." }, { status: 400 });
+      send({ t: "error", error: es ? "No se recibieron archivos." : "No files received." });
+      return;
     }
 
+    send({ t: "s", id: "files", st: "run" });
     const parts: ContentPart[] = [
       {
         type: "text",
@@ -31,6 +36,7 @@ export async function POST(req: NextRequest) {
       const buf = Buffer.from(await file.arrayBuffer());
       const name = file.name || "document";
       const mime = file.type || "";
+      send({ t: "s", id: "files", st: "run", note: name });
 
       if (mime.startsWith("image/")) {
         parts.push({
@@ -58,33 +64,46 @@ export async function POST(req: NextRequest) {
           }
         }
       } else {
-        // last resort: try to read as plain text
         const text = buf.toString("utf-8");
         if (/[\x00-\x08\x0E-\x1F]/.test(text.slice(0, 1000))) {
-          return NextResponse.json(
-            { error: `Formato no soportado: ${name}. Usá JPG, PNG, PDF, XLSX o CSV.` },
-            { status: 400 }
-          );
+          send({
+            t: "error",
+            error: es
+              ? `Formato no soportado: ${name}. Usá JPG, PNG, PDF, XLSX o CSV.`
+              : `Unsupported format: ${name}. Use JPG, PNG, PDF, XLSX or CSV.`,
+          });
+          return;
         }
         parts.push({ type: "text", text: `--- FILE "${name}" (plain text) ---\n${text.slice(0, 40000)}` });
       }
     }
+    send({ t: "s", id: "files", st: "ok" });
 
     const messages: ChatMessage[] = [
       { role: "system", content: extractSystemPrompt(lang) },
       { role: "user", content: parts },
     ];
 
+    send({ t: "s", id: "vision", st: "run" });
     const { data: extraction, model } = await chatJson(ExtractionSchema, {
       models: MODELS.vision,
       messages,
       // pdf-text engine is free; premium OCR engines can be configured here later
       plugins: hasPdf ? [{ id: "file-parser", pdf: { engine: "pdf-text" } }] : undefined,
+      onEvent: (e) => send({ t: "s", id: "vision", st: "run", note: aiEventNote(lang, e) }),
+    });
+    send({
+      t: "s",
+      id: "vision",
+      st: extraction.lineItems.length === 0 ? "warn" : "ok",
+      note:
+        extraction.lineItems.length === 0
+          ? es
+            ? "No se detectaron ítems"
+            : "No line items detected"
+          : `${extraction.lineItems.length} ítems`,
     });
 
-    return NextResponse.json({ extraction, model });
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "Error desconocido durante la extracción.";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+    send({ t: "result", extraction, model });
+  });
 }

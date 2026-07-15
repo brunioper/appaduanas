@@ -39,12 +39,19 @@ export interface ChatMessage {
   content: string | ContentPart[];
 }
 
+/** Progress events emitted while a model call is in flight. */
+export type AiEvent =
+  | { kind: "retry"; delaySec: number; status: number }
+  | { kind: "repair" }
+  | { kind: "done"; model: string };
+
 interface ChatOptions {
   models: string[];
   messages: ChatMessage[];
   plugins?: unknown[];
   temperature?: number;
   maxTokens?: number;
+  onEvent?: (e: AiEvent) => void;
 }
 
 export interface ChatReply {
@@ -70,8 +77,12 @@ export async function chat(opts: ChatOptions): Promise<ChatReply> {
   if (opts.models.length > 1) body.models = opts.models; // OpenRouter fallback routing
 
   let lastError = "";
+  let lastStatus = 0;
   for (const delayMs of [0, 3000, 8000]) {
-    if (delayMs) await sleep(delayMs);
+    if (delayMs) {
+      opts.onEvent?.({ kind: "retry", delaySec: delayMs / 1000, status: lastStatus });
+      await sleep(delayMs);
+    }
     const res = await fetch(`${BASE_URL}/chat/completions`, {
       method: "POST",
       headers: {
@@ -85,12 +96,18 @@ export async function chat(opts: ChatOptions): Promise<ChatReply> {
     if (res.ok) {
       const data = await res.json();
       const text: string | undefined = data.choices?.[0]?.message?.content;
-      if (text && text.trim()) return { text, model: data.model || opts.models[0] };
+      if (text && text.trim()) {
+        const model = data.model || opts.models[0];
+        opts.onEvent?.({ kind: "done", model });
+        return { text, model };
+      }
       lastError = "El modelo devolvió una respuesta vacía.";
+      lastStatus = 200;
       continue;
     }
     const errBody = await res.text();
     lastError = `Fallo del modelo (${res.status}): ${errBody.slice(0, 300)}`;
+    lastStatus = res.status;
     // retry only transient failures; anything else is fatal
     if (![429, 500, 502, 503, 524].includes(res.status)) break;
   }
@@ -125,6 +142,7 @@ export async function chatJson<T>(
     return { data: schema.parse(extractJson(first.text)), model: first.model };
   } catch (err) {
     const detail = err instanceof Error ? err.message.slice(0, 500) : "invalid JSON";
+    opts.onEvent?.({ kind: "repair" });
     const repaired = await chat({
       ...opts,
       messages: [

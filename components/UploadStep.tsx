@@ -2,10 +2,11 @@
 
 import { useRef, useState } from "react";
 import { useI18n } from "@/lib/i18n";
+import { prepareImage } from "@/lib/imagePrep";
 import type { CaseContext } from "@/lib/types";
 import { ErrorBanner } from "./StatusBits";
 
-const ACCEPT = ".jpg,.jpeg,.png,.webp,.pdf,.xlsx,.xls,.csv";
+const ACCEPT = ".jpg,.jpeg,.png,.webp,.heic,.pdf,.xlsx,.xls,.csv";
 const INCOTERMS = ["CIF", "FOB", "EXW", "FCA", "CFR", "CIP", "FAS", "DAP", "DPU", "DDP"];
 const CURRENCIES = ["USD", "EUR", "CNY", "BRL", "UYU", "ARS", "GBP", "JPY", "MXN", "CLP"];
 
@@ -15,6 +16,7 @@ export default function UploadStep({
   ctx,
   setCtx,
   onSubmit,
+  onManual,
   loading,
   error,
 }: {
@@ -23,20 +25,38 @@ export default function UploadStep({
   ctx: CaseContext;
   setCtx: (c: CaseContext) => void;
   onSubmit: () => void;
+  onManual: () => void;
   loading: boolean;
   error: string | null;
 }) {
   const { t } = useI18n();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragging, setDragging] = useState(false);
+  const [preparing, setPreparing] = useState(false);
 
-  const addFiles = (list: FileList | null) => {
+  const addFiles = async (list: FileList | File[] | null) => {
     if (!list) return;
-    const next = [...files];
-    for (const f of Array.from(list)) {
-      if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f);
+    setPreparing(true);
+    try {
+      // screenshots/photos get downscaled client-side: faster upload,
+      // stays under Vercel's body limit, better OCR
+      const prepared = await Promise.all(Array.from(list).map(prepareImage));
+      const next = [...files];
+      for (const f of prepared) {
+        if (!next.some((x) => x.name === f.name && x.size === f.size)) next.push(f);
+      }
+      setFiles(next);
+    } finally {
+      setPreparing(false);
     }
-    setFiles(next);
+  };
+
+  const loadDemo = async () => {
+    const res = await fetch("/samples/demo.csv");
+    const blob = await res.blob();
+    const f = new File([blob], "factura-demo-fob.csv", { type: "text/csv" });
+    setFiles([f]);
+    setCtx({ ...ctx, declaredIncoterm: "FOB", declaredValue: 15550, declaredCurrency: "USD" });
   };
 
   const set = <K extends keyof CaseContext>(k: K, v: CaseContext[K]) => setCtx({ ...ctx, [k]: v });
@@ -60,16 +80,20 @@ export default function UploadStep({
           onDrop={(e) => {
             e.preventDefault();
             setDragging(false);
-            addFiles(e.dataTransfer.files);
+            void addFiles(e.dataTransfer.files);
           }}
           className={`card grid cursor-pointer place-items-center border-2 border-dashed px-6 py-14 text-center transition-colors ${
             dragging ? "!border-[var(--brand)] !bg-[#eef1f7]" : ""
           }`}
         >
-          <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" strokeWidth="1.5" aria-hidden>
-            <path d="M12 16V4m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" strokeLinecap="round" />
-          </svg>
+          {preparing ? (
+            <span className="spinner" style={{ width: 32, height: 32, color: "var(--brand)" }} />
+          ) : (
+            <svg width="44" height="44" viewBox="0 0 24 24" fill="none" stroke="var(--ink-soft)" strokeWidth="1.5" aria-hidden>
+              <path d="M12 16V4m0 0l-4 4m4-4l4 4" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" strokeLinecap="round" />
+            </svg>
+          )}
           <p className="mt-3 font-display text-xl font-semibold">{t("upload.drop")}</p>
           <p className="text-sm text-[var(--ink-soft)]">{t("upload.browse")}</p>
           <p className="mono mt-3 text-[0.68rem] uppercase tracking-wide text-[var(--ink-soft)]">
@@ -82,11 +106,15 @@ export default function UploadStep({
             multiple
             hidden
             onChange={(e) => {
-              addFiles(e.target.files);
+              void addFiles(e.target.files);
               e.target.value = "";
             }}
           />
         </div>
+
+        <button onClick={loadDemo} className="mt-3 text-sm font-semibold text-[var(--brand)] hover:underline">
+          {t("upload.demo")} →
+        </button>
 
         {files.length > 0 && (
           <div className="card mt-4 divide-y">
@@ -108,7 +136,7 @@ export default function UploadStep({
         )}
       </div>
 
-      {/* Context form */}
+      {/* Context form: essentials visible, everything else collapsed */}
       <div className="card fade-up fade-up-1 h-fit p-5">
         <h2 className="font-display text-lg font-bold">{t("ctx.title")}</h2>
         <div className="mt-4 grid grid-cols-2 gap-3">
@@ -155,66 +183,71 @@ export default function UploadStep({
               ))}
             </select>
           </div>
-          <label className="col-span-2 flex items-center gap-2 text-sm font-medium">
-            <input type="checkbox" checked={ctx.autoTaxes} onChange={(e) => set("autoTaxes", e.target.checked)} />
-            {t("ctx.autoTaxes")}
-          </label>
-          <div className="col-span-2">
-            <label className="label">{t("ctx.dutyRate")}</label>
-            <input
-              className="input mono"
-              type="number"
-              min="0"
-              max="200"
-              step="any"
-              value={ctx.dutyRatePct}
-              onChange={(e) => set("dutyRatePct", Number(e.target.value) || 0)}
-            />
-            {ctx.autoTaxes && <p className="mt-1 text-[0.68rem] text-[var(--ink-soft)]">{t("ctx.dutyRateHint")}</p>}
-          </div>
-          <label className="col-span-2 flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={ctx.cifBasis} onChange={(e) => set("cifBasis", e.target.checked)} />
-            {t("ctx.cifBasis")}
-          </label>
         </div>
 
         <details className="mt-4">
           <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-[var(--ink-soft)]">
             {t("ctx.advanced")}
           </summary>
-          <div className="mt-3 grid grid-cols-2 gap-3">
+          <div className="mt-3 space-y-3">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={ctx.autoTaxes} onChange={(e) => set("autoTaxes", e.target.checked)} />
+              {t("ctx.autoTaxes")}
+            </label>
             <div>
-              <label className="label">{t("ctx.warnPct")}</label>
+              <label className="label">{t("ctx.dutyRate")}</label>
               <input
                 className="input mono"
                 type="number"
                 min="0"
-                max="100"
-                value={ctx.thresholds.warnPct}
-                onChange={(e) => set("thresholds", { ...ctx.thresholds, warnPct: Number(e.target.value) || 0 })}
+                max="200"
+                step="any"
+                value={ctx.dutyRatePct}
+                onChange={(e) => set("dutyRatePct", Number(e.target.value) || 0)}
               />
+              {ctx.autoTaxes && <p className="mt-1 text-[0.68rem] text-[var(--ink-soft)]">{t("ctx.dutyRateHint")}</p>}
             </div>
-            <div>
-              <label className="label">{t("ctx.failPct")}</label>
-              <input
-                className="input mono"
-                type="number"
-                min="0"
-                max="100"
-                value={ctx.thresholds.failPct}
-                onChange={(e) => set("thresholds", { ...ctx.thresholds, failPct: Number(e.target.value) || 0 })}
-              />
+            <label className="flex items-center gap-2 text-sm">
+              <input type="checkbox" checked={ctx.cifBasis} onChange={(e) => set("cifBasis", e.target.checked)} />
+              {t("ctx.cifBasis")}
+            </label>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">{t("ctx.warnPct")}</label>
+                <input
+                  className="input mono"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={ctx.thresholds.warnPct}
+                  onChange={(e) => set("thresholds", { ...ctx.thresholds, warnPct: Number(e.target.value) || 0 })}
+                />
+              </div>
+              <div>
+                <label className="label">{t("ctx.failPct")}</label>
+                <input
+                  className="input mono"
+                  type="number"
+                  min="0"
+                  max="100"
+                  value={ctx.thresholds.failPct}
+                  onChange={(e) => set("thresholds", { ...ctx.thresholds, failPct: Number(e.target.value) || 0 })}
+                />
+              </div>
             </div>
           </div>
         </details>
 
         {error && (
-          <div className="mt-4">
+          <div className="mt-4 space-y-2">
             <ErrorBanner message={error} onRetry={onSubmit} />
+            <button onClick={onManual} className="btn btn-ghost w-full justify-center">
+              {t("extract.manual")}
+            </button>
           </div>
         )}
 
-        <button onClick={onSubmit} disabled={files.length === 0 || loading} className="btn btn-primary mt-5 w-full justify-center">
+        <button onClick={onSubmit} disabled={files.length === 0 || loading || preparing} className="btn btn-primary mt-5 w-full justify-center">
           {loading && <span className="spinner" />}
           {loading ? t("act.extracting") : t("act.extract")}
         </button>
